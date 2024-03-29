@@ -12,6 +12,7 @@ from test_functions import (
     runge,
     f2,
     f3,
+    f5,
     multidim_sin,
     multidim_cos,
     multidim_cos_sin,
@@ -22,12 +23,13 @@ TEST_FUNCTIONS = {
     "f2": f2,
     "f3": f3,
     "f4": multidim_cos_sin,
+    "f5": f5,
     "multidim_sin": multidim_sin,
     "multidim_cos": multidim_cos,
 }
 
 SEED_NUMBER = 1228457
-INTERPOLANTS_LOCATION = "./results/interpolants/"
+INTERPOLANTS_LOCATION = "./results/interpolants"
 
 def compute_interpolation_error(
     idx_batch: int,
@@ -59,6 +61,46 @@ def compute_interpolation_error(
     )
 
     return np.max(errors_temp)
+
+
+def load_interpolant_cheb(function_name, num_dim, poly_degree, lp_degree_str, param_str):
+    """Load the Chebyshev interpolant in the Newton basis."""
+    dirname = (
+        f"{INTERPOLANTS_LOCATION}/{function_name}/dim-{num_dim}"
+        f"/lp-{lp_degree_str}/{param_str.replace('-', '').replace('_', '-')}"
+        f"/cheb/"
+    )
+    fname = (
+        f"{dirname}interpolant-{function_name}-{num_dim}"
+        f"-{lp_degree_str}{param_str}-{poly_degree:03}.pkl"
+    )
+
+    with open(fname, "rb") as f:
+        minterpy_interpolant = pickle.load(f)
+
+    return minterpy_interpolant
+
+
+def load_interpolant_leja(function_name, num_dim, poly_degree, lp_degree_str, param_str):
+    """Load the Leja interpolant in the Newton basis."""
+    dirname = (
+        f"{INTERPOLANTS_LOCATION}/{function_name}/dim-{num_dim}"
+        f"/lp-{lp_degree_str}/{param_str.replace('-', '').replace('_', '-')}"
+        f"/leja/"
+    )
+    fname = (
+        f"{dirname}interpolant-{function_name}-{num_dim}"
+        f"-{lp_degree_str}{param_str}-leja-{poly_degree:03}.pkl"
+    )
+    with open(fname, "rb") as f:
+        nwt_coeffs, leja_1d = pickle.load(f)
+
+    mi = mp.MultiIndexSet.from_degree(num_dim, int(poly_degree), float(lp_degree_str))
+    grd = mp.Grid.from_value_set(mi, leja_1d)
+
+    nwt_poly = mp.NewtonPolynomial(mi, nwt_coeffs, grid=grd)
+
+    return nwt_poly
 
 
 @click.command()
@@ -108,11 +150,19 @@ def compute_interpolation_error(
     help="Number of batches for test point evaluations."
 )
 @click.option(
-    "-p",
-    "--param",
+    "-param",
+    "--parameter",
     multiple=True,
     show_default=True,
     help="Parameter for the test function",
+)
+@click.option(
+    "-lj",
+    "--leja",
+    required=False,
+    type=bool,
+    default=False,
+    help="Leja interpolation flag",
 )
 def run_minterpy_error(
     function_name,
@@ -121,19 +171,20 @@ def run_minterpy_error(
     lp_degree,
     test_sample_size,
     num_batches,
-    param,
+    parameter,
+    leja,
 ):
 
     # ---
     poly_degree_start, poly_degree_end = poly_degrees
     test_function = TEST_FUNCTIONS[function_name]
-    param_values = [float(p) for p in param]
+    param_values = [float(p) for p in parameter]
 
     # --- Create a testing dataset
     rng = np.random.default_rng(SEED_NUMBER)
     xx_test = -1 + 2 * rng.random((test_sample_size, num_dim))
     if param_values:
-        if len(param) == 1:
+        if len(parameter) == 1:
             yy_test = test_function(xx_test, parameter=param_values[0])
         else:
             yy_test = test_function(xx_test, parameter=param_values)
@@ -146,8 +197,8 @@ def run_minterpy_error(
     else:
         lp_degree_str = int(float(lp_degree))
     
-    if param:
-        param_str = ["-param"] + [str(p) for p in param]
+    if parameter:
+        param_str = ["-param"] + [str(p) for p in parameter]
         param_str = "_".join(param_str)
     else:
         param_str = "-param_default"
@@ -158,17 +209,15 @@ def run_minterpy_error(
 
     for poly_degree in poly_degrees_range:
         
-        # Save the resulting Newton polynomial object
-        dirname = (
-            f"{INTERPOLANTS_LOCATION}/{function_name}/dim-{num_dim}"
-            f"/lp-{lp_degree_str}/{param_str.replace('-', '').replace('_', '-')}/"
-        )
-        fname = (
-            f"{dirname}interpolant-{function_name}-{num_dim}"
-            f"-{lp_degree_str}{param_str}-{poly_degree:03}.pkl"
-        )
-        with open(fname, "rb") as f:
-            minterpy_interpolant = pickle.load(f)
+        # Load the resulting Newton polynomial object
+        if leja:
+            minterpy_interpolant = load_interpolant_leja(
+                function_name, num_dim, poly_degree, lp_degree_str, param_str
+            )
+        else:
+            minterpy_interpolant = load_interpolant_cheb(
+                function_name, num_dim, poly_degree, lp_degree_str, param_str
+            )
     
         func = partial(
             compute_interpolation_error,
@@ -186,20 +235,27 @@ def run_minterpy_error(
 
         errors_minterpy = np.max(errors_minterpy_temp)
     
-        np.savetxt(
-            f"errors-{function_name}-{num_dim}-{lp_degree_str}{param_str}-{int(poly_degree):03}.csv",
-            [errors_minterpy],
-            delimiter=",",
-        )
+        if leja:
+            np.savetxt(
+                f"errors-{function_name}-{num_dim}-{lp_degree_str}{param_str}-leja-{int(poly_degree):03}.csv",
+                [errors_minterpy],
+                delimiter=",",
+            )
+        else:
+            np.savetxt(
+                f"errors-{function_name}-{num_dim}-{lp_degree_str}{param_str}-{int(poly_degree):03}.csv",
+                [errors_minterpy],
+                delimiter=",",
+            )
 
         # --- Compute the number of points
-        num_coeffs = len(mp.MultiIndexSet.from_degree(int(num_dim), int(poly_degree), float(lp_degree)))
+        # num_coeffs = len(mp.MultiIndexSet.from_degree(int(num_dim), int(poly_degree), float(lp_degree)))
         
-        np.savetxt(
-            f"num-coeffs-{function_name}-{num_dim}-{lp_degree_str}-{int(poly_degree):03}.csv",
-            [num_coeffs],
-            delimiter=",",
-        )
+        # np.savetxt(
+        #     f"num-coeffs-{function_name}-{num_dim}-{lp_degree_str}-{int(poly_degree):03}.csv",
+        #     [num_coeffs],
+        #     delimiter=",",
+        # )
 
 
 if __name__ == "__main__":
