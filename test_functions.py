@@ -38,4 +38,17 @@ def multidim_cos_sin(xx: np.ndarray, parameter: list = [1, 1]) -> np.ndarray:
     xx_sin = params_1 * xx
     xx_cos = params_2 * xx
 
-    return np.cos(np.pi * np.sum(xx_sin, axis=1)) + np.sin(np.pi * np.sum(xx_cos, axis=1))
+    return np.cos(np.pi * np.sum(xx_cos, axis=1)) + np.sin(np.pi * np.sum(xx_sin, axis=1))
+
+
+def f5(xx: np.ndarray) -> np.ndarray:
+    """Compute the M-dimensional F5 function."""
+    m = xx.shape[1]
+    coeffs = np.arange(1, m + 1)
+    coeffs = 5 / coeffs**3
+
+    xx = coeffs * xx
+
+    yy = 1 / (1 + (np.sum(xx, axis=1))**2)
+
+    return yy
