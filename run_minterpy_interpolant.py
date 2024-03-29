@@ -1,5 +1,6 @@
 import click
 import minterpy as mp
+import minterpybottomup as mpbu
 import numpy as np
 import pickle
 
@@ -15,6 +16,7 @@ from test_functions import (
     multidim_sin,
     multidim_cos,
     multidim_cos_sin,
+    f5,
 )
 
 TEST_FUNCTIONS = {
@@ -22,6 +24,7 @@ TEST_FUNCTIONS = {
     "f2": f2,
     "f3": f3,
     "f4": multidim_cos_sin,
+    "f5": f5,
     "multidim_sin": multidim_sin,
     "multidim_cos": multidim_cos,
 }
@@ -55,6 +58,33 @@ def create_interpolant(
     return interp_minterpy.interpolator(my_fun)
 
 
+def create_interpolant_leja(
+    poly_degree: int,
+    my_func: Callable,
+    num_dim: int,
+    lp_degree: float,
+    parameter: Any,
+):
+    """Create a Leja interpolant given a Callable."""
+
+    # --- Create an Leja interpolation grid
+    mi = mp.MultiIndexSet.from_degree(int(num_dim), int(poly_degree), lp_degree)
+    leja_1d = mpbu.leja_1d(mi.poly_degree + 1)[:, np.newaxis]
+    grd = mp.Grid.from_value_set(mi, leja_1d)
+
+    # --- Creata the corresponding Lagrange polynomial
+    if parameter:
+        if len(parameter) == 1:
+            lag_coeffs = my_func(grd.unisolvent_nodes, parameter[0])
+        else:
+            lag_coeffs = my_func(grd.unisolvent_nodes, parameter)
+    else:
+        lag_coeffs = my_func(grd.unisolvent_nodes)
+    nwt_coeffs = mp.dds.dds(lag_coeffs, grd.tree)
+
+    return nwt_coeffs, leja_1d
+
+
 @click.command()
 @click.option(
     "-fn",
@@ -86,22 +116,31 @@ def create_interpolant(
     help="lp-degree of the polynomial",
 )
 @click.option(
-    "-p",
-    "--param",
+    "-param",
+    "--parameter",
     multiple=True,
     show_default=True,
     help="Parameter for the test function",
+)
+@click.option(
+    "-lj",
+    "--leja",
+    required=False,
+    type=bool,
+    default=False,
+    help="Leja interpolation flag",
 )
 def run_minterpy_interpolant(
     function_name,
     num_dim,
     poly_degrees,
     lp_degree,
-    param,
+    parameter,
+    leja,
 ):
 
     # ---
-    param_values = [float(p) for p in param]
+    param_values = [float(p) for p in parameter]
     poly_degree_start, poly_degree_end = poly_degrees
     test_function = TEST_FUNCTIONS[function_name]
 
@@ -111,8 +150,8 @@ def run_minterpy_interpolant(
     else:
         lp_degree_str = int(float(lp_degree))
     
-    if param:
-        param_str = ["-param"] + [str(p) for p in param]
+    if parameter:
+        param_str = ["-param"] + [str(p) for p in parameter]
         param_str = "_".join(param_str)
     else:
         param_str = "-param_default"
@@ -121,22 +160,37 @@ def run_minterpy_interpolant(
     # --- Parallel processing
     poly_degrees_range = np.arange(poly_degree_start, poly_degree_end + 1)
 
-    func = partial(
-        create_interpolant,
-        my_func=test_function,
-        num_dim=num_dim,
-        lp_degree=float(lp_degree),
-        parameter=param_values,
-    )
+    if leja:
+        func = partial(
+            create_interpolant_leja,
+            my_func=test_function,
+            num_dim=num_dim,
+            lp_degree=float(lp_degree),
+            parameter=param_values,
+        )
+    else:
+        func = partial(
+            create_interpolant,
+            my_func=test_function,
+            num_dim=num_dim,
+            lp_degree=float(lp_degree),
+            parameter=param_values,
+        )
 
     pool = Pool(processes=10)
     for idx, res in enumerate(tqdm(pool.imap(func, poly_degrees_range), total=len(poly_degrees_range))):
 
         # Save the resulting Newton polynomial object
-        fname = (
-            f"interpolant-{function_name}-{num_dim}-{lp_degree_str}"
-            f"{param_str}-{poly_degrees_range[idx]:03}.pkl"
-        )
+        if leja:
+            fname = (
+                f"interpolant-{function_name}-{num_dim}-{lp_degree_str}"
+                f"{param_str}-leja-{poly_degrees_range[idx]:03}.pkl"
+            )
+        else:
+            fname = (
+                f"interpolant-{function_name}-{num_dim}-{lp_degree_str}"
+                f"{param_str}-{poly_degrees_range[idx]:03}.pkl"
+            )
         with open(fname, "wb") as f:
             pickle.dump(res, f)
 
