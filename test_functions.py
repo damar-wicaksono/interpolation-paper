@@ -13,7 +13,7 @@ def f2(xx: np.ndarray, parameter: float = 5 / 4) -> np.ndarray:
 
 def f3(xx: np.ndarray, parameter: float = 5 / 4) -> np.ndarray:
     """Compute the M-dimensional F3 function."""
-    return 1 / ((xx[:, 0] - parameter)**2 + (xx[:, 1] - parameter)**2)
+    return 1 / np.sum((xx - parameter)**2, axis=1)
 
 
 def multidim_sin(xx: np.ndarray, parameter: int = 1) -> np.ndarray:
